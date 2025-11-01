@@ -6,6 +6,12 @@ metadata:
 spec:
   interval: 5m
   subscriptions:
+  - git:
+      repoURL: https://github.com/c-yco/argo-kargo-multicluster-lab.git
+      branch: main
+      includePaths:
+      - manifests/**
+      commitSelectionStrategy: NewestFromBranch
   - image:
       repoURL: nginxdemos/hello
       semverConstraint: ^0.3.0

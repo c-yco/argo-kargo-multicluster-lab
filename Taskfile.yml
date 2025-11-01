@@ -1,0 +1,391 @@
+version: '3'
+
+vars:
+  CONTROL_PLANE_CLUSTER: management
+  WORKER_CLUSTERS: dev staging prod
+  ARGOCD_NAMESPACE: argocd
+  KARGO_NAMESPACE: kargo
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  setup:
+    desc: Complete setup - clusters, Argo CD, and Kargo
+    cmds:
+      - task: clusters:create
+      - task: argocd:install
+      - task: kargo:install
+
+  clusters:create:
+    desc: Create Kind clusters (1 control plane + 3 workers)
+    cmds:
+      - |
+        echo "🏗️  Creating Kind clusters (1 control plane + 3 workers)..."
+        
+        # Create control plane cluster with ingress support
+        echo "📍 Creating control plane cluster: {{.CONTROL_PLANE_CLUSTER}}"
+        cat <<EOF | kind create cluster --name {{.CONTROL_PLANE_CLUSTER}} --config=-
+        kind: Cluster
+        apiVersion: kind.x-k8s.io/v1alpha4
+        networking:
+          apiServerAddress: "0.0.0.0"
+        nodes:
+        - role: control-plane
+          kubeadmConfigPatches:
+          - |
+            kind: InitConfiguration
+            nodeRegistration:
+              kubeletExtraArgs:
+                node-labels: "ingress-ready=true"
+          - |
+            kind: ClusterConfiguration
+            apiServer:
+              certSANs:
+              - localhost
+              - 127.0.0.1
+              - host.docker.internal
+          extraPortMappings:
+          - containerPort: 80
+            hostPort: 8080
+            protocol: TCP
+          - containerPort: 443
+            hostPort: 8443
+            protocol: TCP
+        - role: worker
+        - role: worker
+        EOF
+        
+        # Create worker clusters
+        for cluster in {{.WORKER_CLUSTERS}}; do
+          echo "📍 Creating worker cluster: $cluster"
+          cat <<EOF | kind create cluster --name $cluster --config=-
+        kind: Cluster
+        apiVersion: kind.x-k8s.io/v1alpha4
+        networking:
+          apiServerAddress: "0.0.0.0"
+        nodes:
+        - role: control-plane
+          kubeadmConfigPatches:
+          - |
+            kind: ClusterConfiguration
+            apiServer:
+              certSANs:
+              - localhost
+              - 127.0.0.1
+              - host.docker.internal
+        EOF
+        done
+        
+        echo ""
+        echo "✅ Clusters created successfully!"
+        echo "-----------------------------------"
+        kind get clusters
+        echo ""
+        
+        # Fix kubeconfig to use host.docker.internal
+        echo "🔧 Fixing kubeconfig for Docker-outside-of-Docker..."
+        for cluster in {{.CONTROL_PLANE_CLUSTER}} {{.WORKER_CLUSTERS}}; do
+          kubectl config set-cluster kind-$cluster --server=https://host.docker.internal:$(docker port $cluster-control-plane 6443 | cut -d: -f2)
+        done
+        
+        # Set context to control plane cluster
+        kubectl config use-context kind-{{.CONTROL_PLANE_CLUSTER}}
+        echo "🎯 Current context set to: kind-{{.CONTROL_PLANE_CLUSTER}}"
+
+  clusters:list:
+    desc: List all Kind clusters
+    cmds:
+      - kind get clusters
+
+  clusters:contexts:
+    desc: List all kubectl contexts
+    cmds:
+      - kubectl config get-contexts
+
+  clusters:switch:
+    desc: Switch kubectl context to a cluster
+    cmds:
+      - |
+        echo "Available clusters:"
+        kind get clusters | nl
+        echo ""
+        read -p "Enter cluster name: " cluster
+        kubectl config use-context kind-$cluster
+        echo "✅ Switched to: kind-$cluster"
+    interactive: true
+
+  clusters:delete:
+    desc: Delete all Kind clusters
+    prompt: This will delete all Kind clusters. Continue?
+    cmds:
+      - |
+        echo "🗑️  Deleting all Kind clusters..."
+        CLUSTERS=$(kind get clusters 2>/dev/null || echo "")
+        
+        if [ -z "$CLUSTERS" ]; then
+            echo "ℹ️  No Kind clusters found."
+            exit 0
+        fi
+        
+        for cluster in $CLUSTERS; do
+            echo "🗑️  Deleting cluster: $cluster"
+            kind delete cluster --name "$cluster"
+        done
+        
+        echo ""
+        echo "✅ All Kind clusters deleted successfully!"
+
+  argocd:install:
+    desc: Install Argo CD on control plane cluster
+    cmds:
+      - |
+        echo "🔄 Installing Argo CD on {{.CONTROL_PLANE_CLUSTER}} cluster..."
+        
+        # Switch to control plane cluster
+        kubectl config use-context kind-{{.CONTROL_PLANE_CLUSTER}}
+        
+        # Create argocd namespace
+        echo "📦 Creating argocd namespace..."
+        kubectl create namespace {{.ARGOCD_NAMESPACE}} || echo "Namespace already exists"
+        
+        # Install Argo CD
+        echo "📥 Installing Argo CD..."
+        kubectl apply -n {{.ARGOCD_NAMESPACE}} -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+        
+        # Wait for Argo CD to be ready
+        echo "⏳ Waiting for Argo CD to be ready..."
+        kubectl wait --for=condition=available --timeout=300s deployment/argocd-server -n {{.ARGOCD_NAMESPACE}}
+        
+        # Patch argocd-server service
+        echo "🔧 Configuring Argo CD service..."
+        kubectl patch svc argocd-server -n {{.ARGOCD_NAMESPACE}} -p '{"spec": {"type": "LoadBalancer"}}'
+      - task: argocd:info
+
+  argocd:info:
+    desc: Display Argo CD access information
+    cmds:
+      - |
+        echo "✅ Argo CD installed successfully!"
+        echo "-----------------------------------"
+        echo "🔑 Initial admin password:"
+        kubectl -n {{.ARGOCD_NAMESPACE}} get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
+        echo ""
+        echo ""
+        echo "🌐 Access Argo CD UI:"
+        echo "  Username: admin"
+        echo "  Port forward: task argocd:port-forward"
+        echo "  URL: https://localhost:8080"
+        echo ""
+        echo "🔐 Login via CLI:"
+        echo '  argocd login localhost:8080 --username admin --password $(kubectl -n {{.ARGOCD_NAMESPACE}} get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d) --insecure'
+
+  argocd:port-forward:
+    desc: Port forward Argo CD UI
+    cmds:
+      - kubectl port-forward svc/argocd-server -n {{.ARGOCD_NAMESPACE}} 8080:443
+
+  argocd:password:
+    desc: Get Argo CD admin password
+    cmds:
+      - kubectl -n {{.ARGOCD_NAMESPACE}} get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d && echo
+
+  argocd:login:
+    desc: Login to Argo CD CLI
+    cmds:
+      - |
+        PASSWORD=$(kubectl -n {{.ARGOCD_NAMESPACE}} get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d)
+        argocd login localhost:8080 --username admin --password "$PASSWORD" --insecure
+
+  argocd:register-clusters:
+    desc: Register worker clusters with Argo CD
+    cmds:
+      - |
+        echo "🔗 Registering worker clusters with Argo CD..."
+        for cluster in {{.WORKER_CLUSTERS}}; do
+          echo "📍 Registering cluster: $cluster"
+          argocd cluster add kind-$cluster --name $cluster --yes || echo "Cluster already registered"
+        done
+        echo ""
+        echo "✅ Cluster registration complete!"
+        echo "Registered clusters:"
+        argocd cluster list
+
+  argocd:apps:list:
+    desc: List Argo CD applications
+    cmds:
+      - argocd app list
+
+  argocd:apps:deploy:
+    desc: Deploy demo applications
+    cmds:
+      - |
+        echo "🚀 Deploying demo applications..."
+        kubectl apply -f argocd/applications/
+        echo ""
+        echo "✅ Applications deployed!"
+        task: argocd:apps:list
+
+  kargo:install:
+    desc: Install Kargo on control plane cluster
+    cmds:
+      - |
+        echo "📦 Installing Kargo on {{.CONTROL_PLANE_CLUSTER}} cluster..."
+        
+        # Switch to control plane cluster
+        kubectl config use-context kind-{{.CONTROL_PLANE_CLUSTER}}
+        
+        # Install cert-manager first (required by Kargo)
+        echo "📜 Installing cert-manager..."
+        kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.2/cert-manager.yaml
+        echo "⏳ Waiting for cert-manager to be ready..."
+        kubectl wait --for=condition=available --timeout=300s deployment/cert-manager -n cert-manager
+        kubectl wait --for=condition=available --timeout=300s deployment/cert-manager-webhook -n cert-manager
+        kubectl wait --for=condition=available --timeout=300s deployment/cert-manager-cainjector -n cert-manager
+        
+        # Create kargo namespace
+        echo "📦 Creating kargo namespace..."
+        kubectl create namespace {{.KARGO_NAMESPACE}} || echo "Namespace already exists"
+        
+        # Install Kargo
+        echo "📥 Installing Kargo..."
+        helm install kargo oci://ghcr.io/akuity/kargo-charts/kargo \
+          --namespace {{.KARGO_NAMESPACE}} \
+          --create-namespace \
+          --set api.adminAccount.passwordHash='$2y$10$Zrhhie4vLz5ygtVSaif6o.qN36jgs6vjtMBdM6yrU1FOeiAAMMxOm' \
+          --set api.adminAccount.tokenSigningKey=iwishtowashmyirishwristwatch \
+          --wait \
+          --timeout=5m
+        
+        # Wait for Kargo to be ready
+        echo "⏳ Waiting for Kargo to be ready..."
+        kubectl wait --for=condition=available --timeout=300s deployment/kargo-controller -n {{.KARGO_NAMESPACE}} || true
+        kubectl wait --for=condition=available --timeout=300s deployment/kargo-api -n {{.KARGO_NAMESPACE}} || true
+      - task: kargo:info
+
+  kargo:info:
+    desc: Display Kargo access information
+    cmds:
+      - |
+        echo "✅ Kargo installed successfully!"
+        echo "-----------------------------------"
+        echo "🌐 Access Kargo UI:"
+        echo "  Port forward: task kargo:port-forward"
+        echo "  URL: http://localhost:9090"
+
+  kargo:port-forward:
+    desc: Port forward Kargo UI
+    cmds:
+      - kubectl port-forward svc/kargo-api -n {{.KARGO_NAMESPACE}} 9090:80
+
+  kargo:apply:
+    desc: Apply Kargo resources (project, warehouse, stages)
+    cmds:
+      - |
+        echo "📦 Applying Kargo resources..."
+        kubectl apply -f kargo/project.yaml
+        kubectl apply -f kargo/warehouse.yaml
+        kubectl apply -f kargo/stages/
+        echo ""
+        echo "✅ Kargo resources applied!"
+        task: kargo:status
+
+  kargo:status:
+    desc: Show Kargo resources status
+    cmds:
+      - |
+        echo "Kargo Projects:"
+        kargo get projects
+        echo ""
+        echo "Kargo Stages:"
+        kargo get stages -n demo-app
+        echo ""
+        echo "Kargo Freight:"
+        kargo get freight -n demo-app
+
+  dev:
+    desc: Development workflow - build and test
+    cmds:
+      - |
+        echo "🔨 Running development workflow..."
+        echo "  - Validating Kubernetes manifests..."
+        kubectl kustomize manifests/base > /dev/null && echo "    ✅ Base manifests valid"
+        kubectl kustomize manifests/overlays/dev > /dev/null && echo "    ✅ Dev overlay valid"
+        kubectl kustomize manifests/overlays/staging > /dev/null && echo "    ✅ Staging overlay valid"
+        kubectl kustomize manifests/overlays/prod > /dev/null && echo "    ✅ Prod overlay valid"
+        echo ""
+        echo "✅ All manifests validated successfully!"
+
+  validate:
+    desc: Validate all Kubernetes manifests
+    cmds:
+      - task: dev
+
+  logs:argocd:
+    desc: View Argo CD server logs
+    cmds:
+      - kubectl logs -n {{.ARGOCD_NAMESPACE}} -l app.kubernetes.io/name=argocd-server -f
+
+  logs:kargo:
+    desc: View Kargo controller logs
+    cmds:
+      - kubectl logs -n {{.KARGO_NAMESPACE}} -l app.kubernetes.io/name=kargo-controller -f
+
+  ui:
+    desc: Port-forward both Argo CD and Kargo UIs
+    cmds:
+      - |
+        echo "🌐 Starting port forwarding for UIs..."
+        echo "-----------------------------------"
+        echo ""
+        echo "📍 Argo CD UI:  http://localhost:8081"
+        echo "   Username: admin"
+        echo "   Password: $(kubectl -n {{.ARGOCD_NAMESPACE}} get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" 2>/dev/null | base64 -d || echo 'Not available')"
+        echo ""
+        echo "📍 Kargo UI:    https://localhost:3000"
+        echo "   Username: admin"
+        echo "   Password: admin"
+        echo ""
+        echo "⚠️  Press Ctrl+C to stop (you may need to press it twice)"
+        echo ""
+        
+        # Start both port-forwards
+        kubectl port-forward -n {{.ARGOCD_NAMESPACE}} svc/argocd-server 8081:443 &
+        kubectl port-forward -n {{.KARGO_NAMESPACE}} svc/kargo-api 3000:443 &
+        
+        # Wait for all background jobs
+        wait
+
+  health:
+    desc: Check health of all components
+    cmds:
+      - |
+        echo "🏥 Health Check"
+        echo "==============="
+        echo ""
+        echo "Kind Clusters:"
+        kind get clusters | sed 's/^/  ✓ /'
+        echo ""
+        echo "Current Context:"
+        echo "  $(kubectl config current-context)"
+        echo ""
+        echo "Argo CD Status:"
+        kubectl get pods -n {{.ARGOCD_NAMESPACE}} -o wide 2>/dev/null || echo "  Not installed"
+        echo ""
+        echo "Kargo Status:"
+        kubectl get pods -n {{.KARGO_NAMESPACE}} -o wide 2>/dev/null || echo "  Not installed"
+
+  clean:
+    desc: Clean up everything (delete clusters and reset)
+    prompt: This will delete all clusters and data. Continue?
+    cmds:
+      - task: clusters:delete
+
+  reset:
+    desc: Reset and recreate everything
+    prompt: This will delete and recreate all clusters. Continue?
+    cmds:
+      - task: clean
+      - task: setup

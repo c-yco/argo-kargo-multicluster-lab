@@ -1,0 +1,27 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: demo-app-prod
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/yourusername/your-repo.git  # Update with your repo
+    targetRevision: main
+    path: manifests/overlays/prod
+  destination:
+    server: https://kubernetes.default.svc  # For prod cluster, update with actual cluster URL
+    namespace: demo-app
+  syncPolicy:
+    # Manual sync for production - requires approval
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

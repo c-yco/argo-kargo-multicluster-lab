@@ -1,0 +1,19 @@
+apiVersion: kargo.akuity.io/v1alpha1
+kind: Stage
+metadata:
+  name: dev
+  namespace: demo-app
+spec:
+  subscriptions:
+    warehouse: demo-app
+  promotionMechanisms:
+    gitRepoUpdates:
+    - repoURL: https://github.com/yourusername/your-repo.git  # Update with your repo
+      writeBranch: main
+      kustomize:
+        images:
+        - image: nginxdemos/hello
+          path: manifests/overlays/dev
+    argoCDAppUpdates:
+    - appName: demo-app-dev
+      appNamespace: argocd

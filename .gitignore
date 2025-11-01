@@ -1,0 +1,47 @@
+# Ignore build outputs and temporary files
+*.log
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# Ignore Task/Taskfile outputs
+.task/
+
+# Ignore IDE and editor files
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+
+# Ignore secrets and sensitive data
+*.key
+*.pem
+*.crt
+secrets/
+.env
+.env.local
+
+# Ignore kubeconfig files (they contain sensitive cluster info)
+kubeconfig*
+*.kubeconfig
+
+# Ignore Helm charts cache
+charts/*.tgz
+.helm/
+
+# Ignore Kustomize build outputs
+kustomization-*.yaml
+
+# Ignore backup files
+*.bak
+*.backup
+
+# Ignore OS-specific files
+._.DS_Store
+desktop.ini

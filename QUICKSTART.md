@@ -15,7 +15,7 @@ This guide will get you up and running with the Argo CD and Kargo multi-cluster 
 
 ```bash
 # Clone the repository
-git clone <your-repo-url>
+git clone https://github.com/c-yco/argo-kargo-multicluster-lab.git
 cd argo-kargo-multicluster-lab
 
 # Open in VS Code

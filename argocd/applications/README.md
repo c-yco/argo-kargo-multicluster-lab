@@ -12,11 +12,11 @@ This directory contains example Argo CD Application manifests for the demo app a
 
 Before applying these applications:
 
-1. **Update the repository URL** in each application manifest:
+1. **Update the repository URL** in each application manifest (already configured):
    ```yaml
    spec:
      source:
-       repoURL: https://github.com/yourusername/your-repo.git
+       repoURL: https://github.com/c-yco/argo-kargo-multicluster-lab.git
    ```
 
 2. **Register target clusters** with Argo CD (if deploying to separate clusters):

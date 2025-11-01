@@ -8,11 +8,11 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/yourusername/your-repo.git  # Update with your repo
+    repoURL: https://github.com/c-yco/argo-kargo-multicluster-lab.git
     targetRevision: main
     path: manifests/overlays/staging
   destination:
-    server: https://kubernetes.default.svc  # For staging cluster, update with actual cluster URL
+    server: https://kubernetes.default.svc
     namespace: demo-app
   syncPolicy:
     automated:

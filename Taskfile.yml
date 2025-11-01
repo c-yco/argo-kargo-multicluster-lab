@@ -27,56 +27,12 @@ tasks:
         
         # Create control plane cluster with ingress support
         echo "📍 Creating control plane cluster: {{.CONTROL_PLANE_CLUSTER}}"
-        cat <<EOF | kind create cluster --name {{.CONTROL_PLANE_CLUSTER}} --config=-
-        kind: Cluster
-        apiVersion: kind.x-k8s.io/v1alpha4
-        networking:
-          apiServerAddress: "0.0.0.0"
-        nodes:
-        - role: control-plane
-          kubeadmConfigPatches:
-          - |
-            kind: InitConfiguration
-            nodeRegistration:
-              kubeletExtraArgs:
-                node-labels: "ingress-ready=true"
-          - |
-            kind: ClusterConfiguration
-            apiServer:
-              certSANs:
-              - localhost
-              - 127.0.0.1
-              - host.docker.internal
-          extraPortMappings:
-          - containerPort: 80
-            hostPort: 8080
-            protocol: TCP
-          - containerPort: 443
-            hostPort: 8443
-            protocol: TCP
-        - role: worker
-        - role: worker
-        EOF
+        kind create cluster --name {{.CONTROL_PLANE_CLUSTER}} --config=kind/management-cluster.yaml
         
         # Create worker clusters
         for cluster in {{.WORKER_CLUSTERS}}; do
           echo "📍 Creating worker cluster: $cluster"
-          cat <<EOF | kind create cluster --name $cluster --config=-
-        kind: Cluster
-        apiVersion: kind.x-k8s.io/v1alpha4
-        networking:
-          apiServerAddress: "0.0.0.0"
-        nodes:
-        - role: control-plane
-          kubeadmConfigPatches:
-          - |
-            kind: ClusterConfiguration
-            apiServer:
-              certSANs:
-              - localhost
-              - 127.0.0.1
-              - host.docker.internal
-        EOF
+          kind create cluster --name $cluster --config=kind/worker-cluster.yaml
         done
         
         echo ""
@@ -159,6 +115,12 @@ tasks:
         echo "⏳ Waiting for Argo CD to be ready..."
         kubectl wait --for=condition=available --timeout=300s deployment/argocd-server -n {{.ARGOCD_NAMESPACE}}
         
+        # Enable API key capability for admin account
+        echo "🔑 Enabling API key capability for admin account..."
+        kubectl patch cm argocd-cm -n {{.ARGOCD_NAMESPACE}} --type merge -p '{"data":{"accounts.admin":"apiKey, login"}}'
+        kubectl rollout restart deployment argocd-server -n {{.ARGOCD_NAMESPACE}}
+        kubectl rollout status deployment argocd-server -n {{.ARGOCD_NAMESPACE}} --timeout=60s
+        
         # Patch argocd-server service
         echo "🔧 Configuring Argo CD service..."
         kubectl patch svc argocd-server -n {{.ARGOCD_NAMESPACE}} -p '{"spec": {"type": "LoadBalancer"}}'
@@ -191,6 +153,40 @@ tasks:
     desc: Get Argo CD admin password
     cmds:
       - kubectl -n {{.ARGOCD_NAMESPACE}} get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d && echo
+
+  argocd:token:
+    desc: Generate Argo CD API token for admin user
+    cmds:
+      - |
+        echo "🔑 Generating API token for admin user..."
+        echo ""
+        argocd account generate-token --account admin
+        echo ""
+        echo "✅ Token generated! Use it with:"
+        echo "   curl -H 'Authorization: Bearer <token>' https://localhost:8081/api/v1/applications"
+
+  argocd:update-mcp-token:
+    desc: Generate new API token and update MCP configuration
+    cmds:
+      - |
+        echo "🔑 Generating new API token..."
+        TOKEN=$(argocd account generate-token --account admin)
+        
+        echo "📝 Updating .vscode/mcp.json..."
+        
+        # Use jq to update the token in mcp.json
+        jq --arg token "$TOKEN" \
+          '.servers."argocd-mcp-stdio".env.ARGOCD_API_TOKEN = $token' \
+          .vscode/mcp.json > .vscode/mcp.json.tmp
+        
+        mv .vscode/mcp.json.tmp .vscode/mcp.json
+        
+        echo ""
+        echo "✅ MCP configuration updated successfully!"
+        echo "   Token updated in: .vscode/mcp.json"
+        echo ""
+        echo "⚠️  Please reload VS Code window for changes to take effect:"
+        echo "   Press Ctrl+Shift+P and run 'Developer: Reload Window'"
 
   argocd:login:
     desc: Login to Argo CD CLI
@@ -352,7 +348,7 @@ tasks:
         echo ""
         
         # Start both port-forwards
-        kubectl port-forward -n {{.ARGOCD_NAMESPACE}} svc/argocd-server 8081:443 &
+        kubectl port-forward -n {{.ARGOCD_NAMESPACE}} svc/argocd-server 8080:443 &
         kubectl port-forward -n {{.KARGO_NAMESPACE}} svc/kargo-api 3000:443 &
         
         # Wait for all background jobs

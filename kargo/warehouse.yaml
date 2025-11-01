@@ -4,6 +4,7 @@ metadata:
   name: demo-app
   namespace: demo-app
 spec:
+  interval: 5m
   subscriptions:
   - image:
       repoURL: nginxdemos/hello

@@ -4,17 +4,38 @@ metadata:
   name: staging
   namespace: demo-app
 spec:
-  subscriptions:
-    upstreamStages:
-    - name: dev
-  promotionMechanisms:
-    gitRepoUpdates:
-    - repoURL: https://github.com/yourusername/your-repo.git  # Update with your repo
-      writeBranch: main
-      kustomize:
-        images:
-        - image: nginxdemos/hello
-          path: manifests/overlays/staging
-    argoCDAppUpdates:
-    - appName: demo-app-staging
-      appNamespace: argocd
+  requestedFreight:
+  - origin:
+      kind: Warehouse
+      name: demo-app
+    sources:
+      stages:
+      - dev
+  promotionTemplate:
+    spec:
+      steps:
+      - uses: git-clone
+        config:
+          repoURL: https://github.com/c-yco/argo-kargo-multicluster-lab.git
+          checkout:
+          - branch: main
+            path: ./src
+      - uses: kustomize-set-image
+        config:
+          path: ./src/manifests/overlays/staging
+          images:
+          - image: nginxdemos/hello
+      - uses: git-commit
+        config:
+          path: ./src
+          messageFromSteps:
+          - kustomize-set-image
+      - uses: git-push
+        config:
+          path: ./src
+          targetBranch: main
+      - uses: argocd-update
+        config:
+          apps:
+          - name: demo-app-staging
+            namespace: argocd

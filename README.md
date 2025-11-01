@@ -33,7 +33,7 @@ A complete development environment for learning and experimenting with Argo CD, 
 
 1. Clone this repository:
    ```bash
-   git clone <your-repo-url>
+   git clone https://github.com/c-yco/argo-kargo-multicluster-lab.git
    cd argo-kargo-multicluster-lab
    ```
 

@@ -9,7 +9,7 @@ spec:
   project: default
   source:
     repoURL: https://github.com/c-yco/argo-kargo-multicluster-lab.git
-    targetRevision: main
+    targetRevision: env/dev
     path: manifests/overlays/dev
   destination:
     server: https://kubernetes.default.svc

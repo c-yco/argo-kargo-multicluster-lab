@@ -32,7 +32,7 @@ spec:
       - uses: git-push
         config:
           path: ./src
-          targetBranch: main
+          targetBranch: env/dev
       - uses: argocd-update
         config:
           apps:
